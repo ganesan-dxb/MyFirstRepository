@@ -1,0 +1,73 @@
+@page
+@model StudentApp.Web.Pages.Students.IndexModel
+@{
+    ViewData["Title"] = "Students";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">Students</h2>
+    <div class="d-flex align-items-center gap-3">
+        @if (Model.FromCache)
+        {
+            <span class="badge bg-success cache-badge">⚡ Served from Redis Cache</span>
+        }
+        else
+        {
+            <span class="badge bg-secondary cache-badge">🗄️ Fetched from SQL Server</span>
+        }
+        <a asp-page="Create" class="btn btn-primary btn-sm">+ Add Student</a>
+    </div>
+</div>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        @TempData["Success"]
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+@if (!Model.Students.Any())
+{
+    <div class="alert alert-info">No students found. <a asp-page="Create">Add the first one!</a></div>
+}
+else
+{
+    <div class="card shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Date of Birth</th>
+                        <th>Grade</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var student in Model.Students)
+                    {
+                        <tr>
+                            <td>@student.Id</td>
+                            <td><strong>@student.FirstName @student.LastName</strong></td>
+                            <td>@student.Email</td>
+                            <td>@student.DateOfBirth.ToString("dd MMM yyyy")</td>
+                            <td><span class="badge bg-primary">@student.Grade</span></td>
+                            <td>
+                                <a asp-page="Edit" asp-route-id="@student.Id" class="btn btn-sm btn-outline-primary me-1">Edit</a>
+                                <a asp-page="Details" asp-route-id="@student.Id" class="btn btn-sm btn-outline-secondary me-1">View</a>
+                                <form method="post" asp-page-handler="Delete" asp-route-id="@student.Id" class="d-inline"
+                                      onsubmit="return confirm('Delete @student.FirstName @student.LastName?')">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <p class="text-muted mt-2 small">Total: @Model.Students.Count students</p>
+}

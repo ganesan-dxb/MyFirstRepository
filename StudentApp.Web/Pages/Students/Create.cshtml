@@ -1,0 +1,303 @@
+@page
+@model StudentApp.Web.Pages.Students.CreateModel
+@{
+    ViewData["Title"] = "Register Student";
+}
+
+<!-- ── System health banner (shown when services are degraded) ── -->
+<div id="healthBanner" class="alert alert-warning d-none" role="alert">
+    <strong>⚠️ Service Notice:</strong>
+    <span id="healthBannerMessage">Registration service is experiencing issues. Submissions will be queued and processed automatically.</span>
+</div>
+
+<div class="container mt-4">
+    <h2>Student Registration</h2>
+
+    <form id="registrationForm">
+        <div class="mb-3">
+            <label for="name" class="form-label">Full Name</label>
+            <input type="text" class="form-control" id="name" required />
+        </div>
+        <div class="mb-3">
+            <label for="email" class="form-label">Email</label>
+            <input type="email" class="form-control" id="email" required />
+        </div>
+        <div class="mb-3">
+            <label for="course" class="form-label">Course</label>
+            <input type="text" class="form-control" id="course" required />
+        </div>
+        <button type="submit" class="btn btn-primary" id="submitBtn">Register</button>
+    </form>
+
+    <!-- ── Status panel (hidden until submission) ── -->
+    <div id="statusPanel" class="mt-4 d-none">
+        <div id="statusCard" class="card">
+            <div class="card-body">
+                <div id="statusIcon" class="fs-1 mb-2">⏳</div>
+                <h5 id="statusTitle" class="card-title">Processing your registration...</h5>
+                <p id="statusMessage" class="card-text text-muted">
+                    Please wait. You will be notified automatically.
+                </p>
+
+                <!-- SignalR connection indicator -->
+                <small>
+                    <span id="signalrBadge" class="badge bg-secondary">🔴 Connecting...</span>
+                </small>
+
+                <!-- Retry button (shown on failure) -->
+                <div id="retrySection" class="mt-3 d-none">
+                    <button class="btn btn-outline-primary btn-sm" onclick="resetForm()">
+                        Try Again
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.0/signalr.min.js"></script>
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const API_BASE        = 'https://localhost:5200'; // via YARP Gateway
+const POLL_INTERVAL   = 3000;  // ms — polling fallback
+const HEALTH_INTERVAL = 10000; // ms — check system health
+const WORKER_DOWN_MSG = 'Registration service is temporarily unavailable. Please try again in a few minutes.';
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let correlationId  = null;
+let pollTimer      = null;
+let healthTimer    = null;
+let connection     = null;
+let signalrConnected = false;
+
+// ── Health check: poll /api/system/health every 10s ───────────────────────────
+async function checkSystemHealth() {
+    try {
+        const res  = await fetch(`${API_BASE}/api/system/health`);
+        const data = await res.json();
+
+        const isWorkerDown = data.workerStatus !== 'Healthy';
+        const isDbDown     = data.databaseStatus === 'Unhealthy';
+
+        const banner = document.getElementById('healthBanner');
+        const msg    = document.getElementById('healthBannerMessage');
+
+        if (isWorkerDown) {
+            msg.textContent = 'The registration worker is currently offline. ' +
+                              'Submissions will be queued and processed when service resumes.';
+            banner.classList.remove('d-none');
+        } else if (isDbDown) {
+            msg.textContent = 'Database is temporarily unavailable. ' +
+                              'Your registration will be saved automatically when it recovers.';
+            banner.classList.remove('d-none');
+        } else {
+            banner.classList.add('d-none');
+        }
+    } catch {
+        // If health check itself fails — API might be down
+        // Don't crash — just leave banner as-is
+    }
+}
+
+// ── Submit handler ────────────────────────────────────────────────────────────
+document.getElementById('registrationForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting...';
+
+    const payload = {
+        name:   document.getElementById('name').value,
+        email:  document.getElementById('email').value,
+        course: document.getElementById('course').value
+    };
+
+    try {
+        const res  = await fetch(`${API_BASE}/api/registration`, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(payload)
+        });
+
+        if (res.status === 503) {
+            // Worker is detected as down — API returned fast fail
+            showStatus('error', '❌', 'Service Unavailable', WORKER_DOWN_MSG, true);
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Register';
+            return;
+        }
+
+        if (!res.ok) {
+            throw new Error(`HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        correlationId = data.correlationId;
+
+        // Show status panel
+        showStatus('pending', '⏳', 'Processing your registration...', data.message);
+
+        // Connect SignalR
+        connectSignalR(correlationId);
+
+        // Start polling fallback (in case SignalR drops)
+        startPolling(correlationId);
+
+    } catch (err) {
+        showStatus('error', '❌', 'Submission Failed',
+            'Could not reach the registration service. Please check your connection and try again.',
+            true);
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Register';
+    }
+});
+
+// ── SignalR ───────────────────────────────────────────────────────────────────
+function connectSignalR(corrId) {
+    connection = new signalR.HubConnectionBuilder()
+        .withUrl(`${API_BASE}/hubs/registration`)
+        .withAutomaticReconnect([0, 2000, 5000, 10000, 30000]) // retry schedule
+        .configureLogging(signalR.LogLevel.Warning)
+        .build();
+
+    // ── Handlers ──────────────────────────────────────────────────────────────
+
+    // Intermediate status (retrying, DB down message at ~10s)
+    connection.on('RegistrationStatusUpdate', (data) => {
+        showStatus('retrying', '⏳', 'Still Working...', data.message);
+    });
+
+    // Success
+    connection.on('RegistrationComplete', (data) => {
+        stopPolling();
+        showStatus('success', '✅', 'Registration Successful!', data.message);
+    });
+
+    // Failure (all retries exhausted)
+    connection.on('RegistrationFailed', (data) => {
+        stopPolling();
+        showStatus('error', '❌', 'Registration Failed', data.message, true);
+    });
+
+    // Connection state events
+    connection.onreconnecting(() => {
+        setBadge('🟡 Reconnecting...', 'warning');
+        signalrConnected = false;
+    });
+
+    connection.onreconnected(() => {
+        setBadge('🟢 Live', 'success');
+        signalrConnected = true;
+    });
+
+    connection.onclose(() => {
+        setBadge('🔴 Disconnected', 'danger');
+        signalrConnected = false;
+        // Keep polling as fallback
+    });
+
+    // ── Start connection ───────────────────────────────────────────────────────
+    connection.start()
+        .then(() => {
+            setBadge('🟢 Live', 'success');
+            signalrConnected = true;
+            return connection.invoke('JoinRegistrationGroup', corrId);
+        })
+        .catch(err => {
+            console.warn('SignalR connection failed:', err);
+            setBadge('🔴 Offline (polling)', 'danger');
+            // Polling fallback still active
+        });
+}
+
+// ── Polling fallback ──────────────────────────────────────────────────────────
+function startPolling(corrId) {
+    pollTimer = setInterval(async () => {
+        try {
+            const res  = await fetch(`${API_BASE}/api/registration/${corrId}/status`);
+            const data = await res.json();
+
+            // If SignalR already delivered a terminal state, stop polling
+            const currentTitle = document.getElementById('statusTitle').textContent;
+            if (currentTitle.includes('Successful') || currentTitle.includes('Failed')) {
+                stopPolling();
+                return;
+            }
+
+            switch (data.status) {
+                case 'Completed':
+                    stopPolling();
+                    showStatus('success', '✅', 'Registration Successful!', data.message);
+                    break;
+                case 'Failed':
+                    stopPolling();
+                    showStatus('error', '❌', 'Registration Failed', data.message, true);
+                    break;
+                case 'Retrying':
+                    // Only update if SignalR hasn't already shown this
+                    if (!signalrConnected) {
+                        showStatus('retrying', '⏳', 'Still Working...', data.message);
+                    }
+                    break;
+                // Pending/Processing — keep spinner
+            }
+        } catch {
+            // Network blip — keep polling
+        }
+    }, POLL_INTERVAL);
+}
+
+function stopPolling() {
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function showStatus(type, icon, title, message, showRetry = false) {
+    document.getElementById('statusPanel').classList.remove('d-none');
+    document.getElementById('registrationForm').classList.add('d-none');
+
+    const card    = document.getElementById('statusCard');
+    const colors  = { pending: 'border-info', retrying: 'border-warning',
+                      success: 'border-success', error: 'border-danger' };
+
+    card.className = `card ${colors[type] || ''}`;
+    document.getElementById('statusIcon').textContent    = icon;
+    document.getElementById('statusTitle').textContent   = title;
+    document.getElementById('statusMessage').textContent = message;
+
+    if (showRetry) {
+        document.getElementById('retrySection').classList.remove('d-none');
+    }
+}
+
+function resetForm() {
+    stopPolling();
+    if (connection) connection.stop();
+    correlationId = null;
+    signalrConnected = false;
+
+    document.getElementById('statusPanel').classList.add('d-none');
+    document.getElementById('retrySection').classList.add('d-none');
+    document.getElementById('registrationForm').classList.remove('d-none');
+
+    const submitBtn = document.getElementById('submitBtn');
+    submitBtn.disabled    = false;
+    submitBtn.textContent = 'Register';
+}
+
+function setBadge(text, color) {
+    const badge = document.getElementById('signalrBadge');
+    badge.textContent  = text;
+    badge.className    = `badge bg-${color}`;
+}
+
+// ── Start health polling immediately ──────────────────────────────────────────
+checkSystemHealth();
+healthTimer = setInterval(checkSystemHealth, HEALTH_INTERVAL);
+</script>
+}
