@@ -1,0 +1,163 @@
+version: "3.9"
+
+services:
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 60s
+      timeout: 3s
+      retries: 5
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+          cpus: "0.25"
+      restart_policy:
+        condition: on-failure
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "YourStrong@Passw0rd"
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'YourStrong@Passw0rd' -Q 'SELECT 1' -No"]
+      interval: 60s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+      restart_policy:
+        condition: on-failure
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 60s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          memory: 500M
+          cpus: "0.5"
+        reservations:
+          memory: 256M
+          cpus: "0.25"
+      restart_policy:
+        condition: on-failure
+
+  studentapp-api:
+    image: studentapp-api:latest
+    ports:
+      - "5100:5100"
+      - "5005:5005"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      DOTNET_URLS: http://0.0.0.0:5100
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=StudentAppDb;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=True;"
+      ConnectionStrings__Redis: "redis:6379"
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
+      AllowedOrigins__WebUI: http://localhost:5000
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  studentapp-worker:
+    image: studentapp-worker:latest
+    environment:
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=StudentAppDb;User Id=sa;Password=YourStrong@Passw0rd;TrustServerCertificate=True;"
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  studentapp-notifications:
+    image: studentapp-notifications:latest
+    ports:
+      - "5300:5300"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
+      AllowedOrigins__WebUI: http://localhost:5000
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  studentapp-gateway:
+    image: studentapp-gateway:latest
+    ports:
+      - "5200:5200"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Redis: "redis:6379"
+      AllowedOrigins__WebUI: http://localhost:5000
+    networks:
+      - internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  redis-data:
+  sql-data:
+  rabbitmq-data:
+
+networks:
+  internal:
+    driver: overlay

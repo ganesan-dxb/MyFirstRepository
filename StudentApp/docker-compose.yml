@@ -1,0 +1,193 @@
+version: "3.9"
+
+services:
+
+  # ── Redis ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: studentapp-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - internal
+
+  # ── SQL Server ────────────────────────────────────────────────────────
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: studentapp-sql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD_FILE: /run/secrets/mssql_password
+    ports:
+      - "127.0.0.1:1433:1433"
+    volumes:
+      - sql-data:/var/opt/mssql
+    secrets:
+      - mssql_password
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$(cat /run/secrets/mssql_password)\" -Q 'SELECT 1' -No"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - internal
+
+  # ── RabbitMQ ─────────────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: studentapp-rabbitmq
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+    networks:
+      - internal
+
+  # ── API ──────────────────────────────────────────────────────────────
+  studentapp-api:
+    build:
+      context: ..
+      dockerfile: StudentApp.API/Dockerfile
+    container_name: studentapp-api
+    ports:
+      - "127.0.0.1:5100:5100"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://0.0.0.0:5100
+      - DB_SERVER=sqlserver
+      - DB_NAME=StudentAppDb
+      - DB_USER=sa
+      - ConnectionStrings__Redis=redis:6379
+      - RabbitMq__Host=rabbitmq
+      - RabbitMq__Username=${RABBITMQ_USER:-guest}
+      - AllowedOrigins__WebUI=http://localhost:5000
+    secrets:
+      - mssql_password
+      - rabbitmq_password
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── Worker ───────────────────────────────────────────────────────────
+  studentapp-worker:
+    build:
+      context: ..
+      dockerfile: StudentApp.Worker/Dockerfile
+    container_name: studentapp-worker
+    environment:
+      - DB_SERVER=sqlserver
+      - DB_NAME=StudentAppDb
+      - DB_USER=sa
+      - RabbitMq__Host=rabbitmq
+      - RabbitMq__Username=${RABBITMQ_USER:-guest}
+    secrets:
+      - mssql_password
+      - rabbitmq_password
+    restart: unless-stopped
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── Notifications ────────────────────────────────────────────────────
+  studentapp-notifications:
+    build:
+      context: ..
+      dockerfile: StudentApp.Notifications/Dockerfile
+    container_name: studentapp-notifications
+    ports:
+      - "127.0.0.1:5300:5300"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://0.0.0.0:5300
+      - RabbitMq__Host=rabbitmq
+      - RabbitMq__Username=${RABBITMQ_USER:-guest}
+      - AllowedOrigins__WebUI=http://localhost:5000
+    secrets:
+      - rabbitmq_password
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── Gateway ──────────────────────────────────────────────────────────
+  studentapp-gateway:
+    build:
+      context: ..
+      dockerfile: StudentApp.Gateway/Dockerfile
+    container_name: studentapp-gateway
+    ports:
+      - "5200:5200"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://0.0.0.0:5200
+      - ConnectionStrings__Redis=redis:6379
+      - AllowedOrigins__WebUI=http://localhost:5000
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      studentapp-api:
+        condition: service_started
+      studentapp-notifications:
+        condition: service_started
+    networks:
+      - internal
+
+# ── Secrets ────────────────────────────────────────────────────────────
+secrets:
+  mssql_password:
+    file: ./secrets/mssql_password.txt
+  rabbitmq_password:
+    file: ./secrets/rabbitmq_password.txt
+
+# ── Volumes ────────────────────────────────────────────────────────────
+volumes:
+  redis-data:
+  sql-data:
+  rabbitmq-data:
+
+# ── Network ────────────────────────────────────────────────────────────
+networks:
+  internal:
+    driver: bridge
