@@ -1,0 +1,50 @@
+# =========================
+# Build outputs
+# =========================
+bin/
+obj/
+debug/
+release/
+
+# =========================
+# Visual Studio
+# =========================
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# =========================
+# Build artifacts
+# =========================
+*.dll
+*.exe
+*.pdb
+*.log
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Node / frontend (if applicable)
+# =========================
+node_modules/
+dist/
+build/
+
+# =========================
+# Secrets / config
+# =========================
+.env
+appsettings.Development.json
+
+# =========================
+# Temporary files
+# =========================
+*.tmp
+*.cache

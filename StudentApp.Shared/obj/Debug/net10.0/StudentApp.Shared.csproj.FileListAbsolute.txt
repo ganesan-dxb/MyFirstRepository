@@ -1,0 +1,11 @@
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/bin/Debug/net10.0/StudentApp.Shared.deps.json
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/bin/Debug/net10.0/StudentApp.Shared.dll
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/bin/Debug/net10.0/StudentApp.Shared.pdb
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/obj/Debug/net10.0/StudentApp.Shared.GeneratedMSBuildEditorConfig.editorconfig
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/obj/Debug/net10.0/StudentApp.Shared.AssemblyInfoInputs.cache
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/obj/Debug/net10.0/StudentApp.Shared.AssemblyInfo.cs
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/obj/Debug/net10.0/StudentApp.Shared.csproj.CoreCompileInputs.cache
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/obj/Debug/net10.0/StudentApp.Shared.dll
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/obj/Debug/net10.0/refint/StudentApp.Shared.dll
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/obj/Debug/net10.0/StudentApp.Shared.pdb
+D:/DATA/RD/Docker/StudentApp/StudentApp.Shared/obj/Debug/net10.0/ref/StudentApp.Shared.dll
